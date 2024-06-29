@@ -1,0 +1,258 @@
+<img width="100%" src="https://qiita-image-store.s3.ap-northeast-1.amazonaws.com/0/986141/4d90c9cc-07f3-9a44-e99c-e8364e3f8bf6.png">
+
+
+## タイムズスクエアはニューヨークだけじゃない！
+旅行が好きなのですが、タイムズスクエアってたくさんあるんですね。ということで、`Google Maps API`と`GeoPandas`を使って世界のタイムズスクエアのデータセットをつくります！
+
+<details><summary>最終的なコードはこちらです。</summary>
+
+```python
+[in]
+import pandas as pd
+import requests
+import geopandas as gpd
+
+def get_times_square_locations(api_key, query='timessquare'):
+    # Google Places APIのエンドポイント
+    url = f'https://maps.googleapis.com/maps/api/place/textsearch/json'
+    location_names = []
+    lats = []
+    lngs = []
+    geos = []
+    
+    # 検索する場所のリスト（）
+    locations_to_search = [
+        {'location': '40.7580,-73.9855', 'radius': 50000},  # 北米
+        {'location': '-16.063049, -59.941218', 'radius': 50000},  # 南米
+        {'location': '24.182634, 55.213924', 'radius': 50000}, # 中東
+        {'location': '56.116630, 25.516148', 'radius': 50000},  # ヨーロッパ
+        {'location': '0.942591, 18.697926', 'radius': 50000}, # アフリカ
+        {'location': '22.672245, 112.287533', 'radius': 50000}, # 中国
+        {'location': '37.572407, 128.221290', 'radius': 50000}   # アジア
+    ]
+    
+    for loc in locations_to_search:
+        params = {
+            'query': query,
+            'location': loc['location'],
+            'radius': loc['radius'],
+            'type': 'tourist_attraction',
+            'key': api_key
+        }
+        
+        while True:
+            # APIリクエストを送信
+            response = requests.get(url, params=params)
+            results = response.json().get('results', [])
+            # 緯度と経度を取得
+            for result in results:
+                location_names.append(result.get('name'))
+                lats.append(result['geometry']['location']['lat'])
+                lngs.append(result['geometry']['location']['lng'])
+            
+            # 次のページのトークンを取得
+            next_page_token = response.json().get('next_page_token')
+            if not next_page_token:
+                break
+            
+            # 次のページをリクエストするためのパラメータを更新
+            params['pagetoken'] = next_page_token
+    df = pd.DataFrame({'location name':location_names,'latitude':lats,'longitude':lngs})
+    return df
+
+# 使用するAPIキーを指定
+API_KEY = YOUR_API_KEY
+
+# 「times square」という名前のつく場所のリストを取得
+times_square_locations = get_times_square_locations(YOUR_API_KEY)
+
+# 重複を削除
+times_square_locations = times_square_locations.drop_duplicates().reset_index(drop=True)
+
+# geometryデータに変換
+gdf = gpd.GeoDataFrame(
+    times_square_locations, 
+    geometry=gpd.points_from_xy(times_square_locations.longitude, times_square_locations.latitude),
+    crs="EPSG:4326"
+)
+
+# 世界の国の名前と空間座標のデータセットを読み込む
+world = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
+
+# sjoinでgdfとworldを結合
+timessquares = gpd.sjoin(gdf, world)
+print(timessquares.name.unique())
+
+[out]
+['United States of America' 'United Arab Emirates' 'Saudi Arabia' 'China'
+ 'South Korea']
+```
+
+</details>
+
+地図で見るとこんな結果になりました。Foliumの使い方は最後に紹介します。
+![image.png](https://qiita-image-store.s3.ap-northeast-1.amazonaws.com/0/986141/e16b0027-f9ed-1b67-ca08-71057e37b113.png)
+
+
+## 実装のポイント
+Google Maps APIを使って **"times square"** と名の付く場所の座標データの一覧を取得します。レスポンスを見ると住所が記載されていますが、国名を直接取得することができません。
+
+
+<details><summary>レスポンスの例</summary>
+
+```
+{'business_status': 'OPERATIONAL', 
+'formatted_address': 'Manhattan, NY 10036', 
+'geometry': {'location': {'lat': 40.7579747, 'lng': -73.9855426}, 'viewport': {'northeast': {'lat': 40.76098665, 'lng': -73.9834052}, 'southwest': {'lat': 40.75504125, 'lng': -73.98769160000002}}}, 
+'icon': 'https://maps.gstatic.com/mapfiles/place_api/icons/v1/png_71/generic_business-71.png', 
+'icon_background_color': '#7B9EB0', 
+'icon_mask_base_uri': 'https://maps.gstatic.com/mapfiles/place_api/icons/v2/generic_pinlet', 
+'name': 'Times Square', 
+'photos': [{'height': 4000, 'html_attributions': ['<a href="https://maps.google.com/maps/contrib/112698735986262334522">Faisal Baig</a>'], 
+'photo_reference': 'AUc7tXU8BvX1s_KjhcSMAnyQAV4Dpc2vgKY6_OcRKt3ANn_k6SkwcmdrVVJ2iLCjPsTzA9Wq8V6WiCNx8e8dxBAZeeMK03SxFHnbU1VNTONdA0QCzyLQJJHntkjzz-PDoa6jUcXk2l5h3ygTY-AlHe6_AjlCcYU5CF-0E2RJWpP7zTFeOVw0', 'width': 3000}], 
+'place_id': 'ChIJmQJIxlVYwokRLgeuocVOGVU', 
+'plus_code': {'compound_code': 'Q257+5Q Manhattan, New York, NY', 'global_code': '87G8Q257+5Q'}, 
+'rating': 4.7, 
+'reference': 'ChIJmQJIxlVYwokRLgeuocVOGVU', 
+'types': ['tourist_attraction', 'point_of_interest', 'establishment'], 'user_ratings_total': 213454}
+```
+</details>
+
+したがってどの国にあるのかという情報を、**タイムズスクエアの座標データと各国の座標(空間)データを結合させる**ことで手に入れます。
+
+![画像1.png](https://qiita-image-store.s3.ap-northeast-1.amazonaws.com/0/986141/cca4708d-b414-8435-16d6-07fc05d6a5ee.png)
+
+
+例えば、Pandasの[mergeメソッド](https://pandas.pydata.org/docs/reference/api/pandas.merge.html)を使う際はキーとする列を選び、共通の値でデータを結合しますが、「ある場所」と「ある地域」を結合する場合は、GeoPandasの**sjoinメソッド**を使います。
+では順を追って説明します。
+
+## Google Map APIでタイムズスクエアデータの取得
+まず座標データを手に入れます。
+
+<details><summary>ソースコードはこちら</summary>
+
+```python
+import pandas as pd
+import requests
+
+def get_times_square_locations(api_key, query='timessquare'):
+    # Google Places APIのエンドポイント
+    url = f'https://maps.googleapis.com/maps/api/place/textsearch/json'
+    location_names = []
+    lats = []
+    lngs = []
+    geos = []
+    
+    # 検索する場所のリスト（）
+    locations_to_search = [
+        {'location': '40.7580,-73.9855', 'radius': 50000},  # 北米
+        {'location': '-16.063049, -59.941218', 'radius': 50000},  # 南米
+        {'location': '24.182634, 55.213924', 'radius': 50000}, # 中東
+        {'location': '56.116630, 25.516148', 'radius': 50000},  # ヨーロッパ
+        {'location': '0.942591, 18.697926', 'radius': 50000}, # アフリカ
+        {'location': '22.672245, 112.287533', 'radius': 50000}, # 中国
+        {'location': '37.572407, 128.221290', 'radius': 50000}   # アジア
+    ]
+    
+    for loc in locations_to_search:
+        params = {
+            'query': query,
+            'location': loc['location'],
+            'radius': loc['radius'],
+            'type': 'tourist_attraction',
+            'key': api_key
+        }
+        
+        while True:
+            # APIリクエストを送信
+            response = requests.get(url, params=params)
+            results = response.json().get('results', [])
+            # 緯度と経度を取得
+            for result in results:
+                location_names.append(result.get('name'))
+                lats.append(result['geometry']['location']['lat'])
+                lngs.append(result['geometry']['location']['lng'])
+            
+            # 次のページのトークンを取得
+            next_page_token = response.json().get('next_page_token')
+            if not next_page_token:
+                break
+            
+            # 次のページをリクエストするためのパラメータを更新
+            params['pagetoken'] = next_page_token
+    df = pd.DataFrame({'location　name':location_names,'latitude':lats,'longitude':lngs})
+    return df
+
+# 使用するAPIキーを指定
+API_KEY = YOUR_API_KEY
+
+# 「times square」という名前のつく場所のリストを取得
+times_square_locations = get_times_square_locations(YOUR_API_KEY)
+
+# geometryデータに変換
+gdf = gpd.GeoDataFrame(
+    times_square_locations, 
+    geometry=gpd.points_from_xy(times_square_locations.longitude, times_square_locations.latitude),
+    crs="EPSG:4326"
+)
+```
+</details>
+
+得られたデータセットはこのようになりました。
+<img width="60%" src="https://qiita-image-store.s3.ap-northeast-1.amazonaws.com/0/986141/02097676-0ab7-46b6-bfd8-687bf0f535e1.png">
+
+緯度40度、経度-73度付近がたくさんありますが、これはニューヨークのタイムズスクエア周辺のタイムズスクエアにあやかった施設や「〇〇タイムズスクエア店」のような場所です。検索パラメータで`'type':'tourist_attraction'`のオプションで観光地に絞るような対策はしていますが排除しきれませんでした。
+
+## 世界各国の空間データの取得
+これはとても簡単で、`geopandas`のメソッドに用意されています。
+
+```python
+import geopandas as gpd
+world = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
+```
+
+![image.png](https://qiita-image-store.s3.ap-northeast-1.amazonaws.com/0/986141/ba70d56d-516d-bc23-8e6b-15be23395d9d.png)
+
+国名と空間座標のデータが手に入りました。
+
+## タイムズスクエアと国の空間座標データを結合させる
+位置をキーとして結合させるには、`geopandas.sjoin()`を使います。
+
+```python
+# gdf:タイムズスクエアの座標データ
+timessquares = gpd.sjoin(gdf, world)
+```
+
+![image.png](https://qiita-image-store.s3.ap-northeast-1.amazonaws.com/0/986141/86f90af3-9361-c08b-2c64-4f5495a47f9f.png)
+
+無事にタイムズスクエアが、どの国にあるかわかりました。
+
+ちなみに、サウジアラビアに"Time Square"("s"がない)という場所がありましたが、なかなかの迫力です。
+
+https://www.sixteen-nine.net/2021/11/04/saudi-entertainment-complex-emulates-times-square-on-what-was-a-patch-of-sand-four-months-ago/
+
+## 補足
+
+### 躓いたところ：全世界のタイムズスクエアが上手く検索できない！
+普段Google Mapを使う時も、検索結果は全世界のデータではなく、日本だけあるいは自分が住んでいる地域だけの情報を上手いこと取得しています。
+![image.png](https://qiita-image-store.s3.ap-northeast-1.amazonaws.com/0/986141/d2f4f3d9-1002-da90-29a1-6e84a4612b46.png)
+
+
+このAPIのリクエストでも同様に、はじめは、レスポンスはニューヨークのタイムズスクエア1件となってしまいました。[公式ドキュメント](https://developers.google.com/maps/documentation/places/web-service/search-text?hl=ja)を探して、"全世界"を指定するようなオプションが見つけられず、各大陸をローラーで探していくようなコードにして世界中のタイムズスクエアを探しました。
+
+該当するのはソースコード内のこのあたりです。
+```python
+# 検索する場所のリスト（）
+locations_to_search = [
+    {'location': '40.7580,-73.9855', 'radius': 50000},  # 北米
+    {'location': '-16.063049, -59.941218', 'radius': 50000},  # 南米
+    {'location': '24.182634, 55.213924', 'radius': 50000}, # 中東
+    {'location': '56.116630, 25.516148', 'radius': 50000},  # ヨーロッパ
+    {'location': '0.942591, 18.697926', 'radius': 50000}, # アフリカ
+    {'location': '22.672245, 112.287533', 'radius': 50000}, # 中国
+    {'location': '37.572407, 128.221290', 'radius': 50000}   # アジア
+```
+
+### sjoinのオプション
+sjoinはmergeと同じような使い方ができ、`how=left`などの指定が可能です。
+ちなみに`sjoin`は"Spatial join"の略で、空間結合という意味です！
